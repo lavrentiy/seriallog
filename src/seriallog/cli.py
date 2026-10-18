@@ -5,6 +5,7 @@
   seriallog grep PANIC --since 2h  search the logs (all ports unless -p is given)
   seriallog alerts                 alerts from the last 24 hours
   seriallog notify                 desktop notification for each new alert (run in the session)
+  seriallog web                    read-only dashboard on http://127.0.0.1:8777 (no authentication)
   seriallog daemon                 the logger itself (runs as a service)
 """
 
@@ -109,39 +110,18 @@ def cmd_tail(conf, a):
     if not a.follow:
         return 0
     sys.stdout.flush()
-    return follow(conf.log_dir / name, name, p, a.json)
+    return follow(conf.log_dir, name, p, a.json)
 
 
-def follow(folder, name, p, as_json):
-    """Print new lines of today's file as they arrive, moving on at midnight."""
-    day, f = None, None
+def follow(log_dir, name, p, as_json):
+    """Print new lines as they arrive, moving on to the next day file at midnight."""
     try:
-        while True:
-            today = datetime.now().date()
-            if today != day:
-                path = folder / f"{today.isoformat()}.log"
-                if path.exists():
-                    if f:
-                        f.close()
-                    f = open(path, "rb")
-                    if day is None:
-                        f.seek(0, os.SEEK_END)     # tail already printed the history
-                    day = today
-            line = f.readline() if f else b""
-            if line.endswith(b"\n"):
-                e = logfile.parse_line(name, line.decode("utf-8", "replace"))
-                if e:
-                    print(json.dumps(entry_dict(e), ensure_ascii=False) if as_json
-                          else show_entry(e, p), flush=True)
-                continue
-            if line:                                # partial line: wait for the rest
-                f.seek(-len(line), os.SEEK_CUR)
-            time.sleep(0.3)
+        for e in logfile.follow(log_dir, name):
+            if e:
+                print(json.dumps(entry_dict(e), ensure_ascii=False) if as_json
+                      else show_entry(e, p), flush=True)
     except KeyboardInterrupt:
         return 0
-    finally:
-        if f:
-            f.close()
 
 
 def cmd_grep(conf, a):
@@ -238,6 +218,11 @@ def cmd_notify(conf, a):
         return 0
 
 
+def cmd_web(conf, a):
+    from seriallog import web
+    return web.serve(conf, a.bind)
+
+
 def cmd_daemon(conf, a):
     from seriallog import daemon
     return daemon.run(conf)
@@ -283,6 +268,11 @@ def build_parser():
 
     s = sub.add_parser("notify", help="desktop notification for each new alert")
     s.set_defaults(fn=cmd_notify)
+
+    s = sub.add_parser("web", help="read-only web dashboard (no authentication)")
+    s.add_argument("--bind", default="127.0.0.1:8777", metavar="HOST:PORT",
+                   help="listen here (default 127.0.0.1:8777; keep it on localhost or a trusted network)")
+    s.set_defaults(fn=cmd_web)
 
     s = sub.add_parser("daemon", help="run the logger")
     s.set_defaults(fn=cmd_daemon)
