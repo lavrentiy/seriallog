@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seriallog"
+dynamic = ["version"]
+description = "Timestamped logs of serial ports shared by ser2net, with search and alerts"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "lavrentiy" }]
+dependencies = []
+
+[project.scripts]
+seriallog = "seriallog.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "seriallog.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
