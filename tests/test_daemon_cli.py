@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import io
 import json
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,8 +26,8 @@ class FakeSer2net:
         self.scripts = list(scripts)
         self.connections = 0
 
-    async def start(self):
-        self.server = await asyncio.start_server(self.handle, "127.0.0.1", 0)
+    async def start(self, port=0):
+        self.server = await asyncio.start_server(self.handle, "127.0.0.1", port)
         return self.server.sockets[0].getsockname()[1]
 
     async def handle(self, reader, writer):
@@ -41,15 +42,21 @@ class FakeSer2net:
         writer.close()
 
 
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
 class DaemonTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        self.saved = daemon.POLL_ABSENT, daemon.STATUS_EVERY
+        self.saved = daemon.POLL_ABSENT, daemon.STATUS_EVERY, daemon.CONNECT_TIMEOUT
         daemon.POLL_ABSENT, daemon.STATUS_EVERY = 0.05, 0.05
+        daemon.CONNECT_TIMEOUT = 0.1          # Windows takes ~1 s to refuse a connection
 
     def tearDown(self):
-        daemon.POLL_ABSENT, daemon.STATUS_EVERY = self.saved
+        daemon.POLL_ABSENT, daemon.STATUS_EVERY, daemon.CONNECT_TIMEOUT = self.saved
         self.tmp.cleanup()
 
     def run_daemon(self, scripts, seconds=1.5):
@@ -113,6 +120,28 @@ class DaemonTest(unittest.TestCase):
         asyncio.run(go())
         status = json.loads((self.dir / "status.json").read_text())["ports"]["usb0"]
         self.assertEqual(status["state"], "unreachable")
+        (kind, text), = self.entries()                    # the gap explains itself
+        self.assertEqual(kind, "!")
+        self.assertTrue(text.startswith("ser2net unreachable at 127.0.0.1:9: "), text)
+
+    def test_ser2net_comes_back(self):
+        async def go():
+            port = free_port()
+            fake = FakeSer2net([[b"hello\r\n", None]])
+            conf = config.parse({"log_dir": str(self.dir),
+                                 "port": [{"name": "usb0", "port": port}]})
+            task = asyncio.create_task(daemon.Daemon(conf).run())
+            await asyncio.sleep(0.3)                     # first attempt fails
+            await fake.start(port)
+            await asyncio.sleep(1.5)                     # retried after the 1 s backoff
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            fake.server.close()
+        asyncio.run(go())
+        texts = [t for _, t in self.entries()]
+        self.assertTrue(texts[0].startswith("ser2net unreachable at "), texts)
+        self.assertEqual(texts[1:4], ["ser2net reachable", "device connected", "hello"])
 
 
 class CliTest(unittest.TestCase):

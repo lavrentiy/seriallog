@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from seriallog import config, when
 
@@ -37,20 +37,30 @@ class ConfigTest(unittest.TestCase):
             c.port("usb9")
 
 
+def local(*args):
+    return datetime(*args).astimezone()
+
+
 class WhenTest(unittest.TestCase):
-    now = datetime(2026, 10, 18, 19, 30)
+    now = local(2026, 10, 18, 19, 30)
 
     def test_relative(self):
-        self.assertEqual(when.parse("30m", self.now), datetime(2026, 10, 18, 19, 0))
-        self.assertEqual(when.parse("2h", self.now), datetime(2026, 10, 18, 17, 30))
-        self.assertEqual(when.parse("1d", self.now), datetime(2026, 10, 17, 19, 30))
+        self.assertEqual(when.parse("30m", self.now), local(2026, 10, 18, 19, 0))
+        self.assertEqual(when.parse("2h", self.now), local(2026, 10, 18, 17, 30))
+        self.assertEqual(when.parse("1d", self.now), local(2026, 10, 17, 19, 30))
 
     def test_words_and_dates(self):
-        self.assertEqual(when.parse("today", self.now), datetime(2026, 10, 18))
-        self.assertEqual(when.parse("yesterday", self.now), datetime(2026, 10, 17))
-        self.assertEqual(when.parse("2026-10-01", self.now), datetime(2026, 10, 1))
-        self.assertEqual(when.parse("2026-10-01T08:15", self.now), datetime(2026, 10, 1, 8, 15))
+        self.assertEqual(when.parse("today", self.now), local(2026, 10, 18))
+        self.assertEqual(when.parse("yesterday", self.now), local(2026, 10, 17))
+        self.assertEqual(when.parse("2026-10-01", self.now), local(2026, 10, 1))
+        self.assertEqual(when.parse("2026-10-01T08:15", self.now), local(2026, 10, 1, 8, 15))
+        self.assertEqual(when.parse("2026-10-01T08:15+00:00", self.now),
+                         datetime(2026, 10, 1, 8, 15, tzinfo=timezone.utc))
         self.assertIsNone(when.parse("all", self.now))
+
+    def test_results_are_aware(self):
+        for text in ("now", "today", "30m", "2026-10-01"):
+            self.assertIsNotNone(when.parse(text).utcoffset(), text)
 
     def test_bad(self):
         with self.assertRaises(ValueError):

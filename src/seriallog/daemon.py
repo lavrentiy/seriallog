@@ -3,7 +3,9 @@
 ser2net opens the serial device when a client connects. If the device is
 not plugged in it sends "Device open failure: ..." and hangs up, so the
 worker polls every few seconds and logs an event when the device appears or
-goes away. Nothing is ever written to the device.
+goes away. ser2net itself being unreachable, and coming back, is logged as an
+event too, so a gap in a log file explains itself. Nothing is ever written to
+the device.
 """
 
 import asyncio
@@ -15,11 +17,12 @@ import time
 from pathlib import Path
 
 from seriallog import logfile
-from seriallog.logfile import DATA, EVENT, LineSplitter, PortLog, render, stamp
+from seriallog.logfile import DATA, EVENT, LineSplitter, PortLog, parse_stamp, render, stamp
 
 log = logging.getLogger("seriallog")
 
 SER2NET_OPEN_FAILURE = b"Device open failure"
+CONNECT_TIMEOUT = 5.0      # seconds to reach ser2net
 POLL_ABSENT = 3.0          # seconds between tries while the device is unplugged
 FIRST_DATA_WAIT = 0.5      # ser2net reports an open failure within this time
 STATUS_EVERY = 2.0
@@ -127,9 +130,9 @@ class PortWorker:
         self.split = LineSplitter()
         self.state = None
 
-    def event(self, text):
+    def event(self, text, level=logging.INFO):
         self.out.write(self.d.clock(), EVENT, text)
-        log.info("%s: %s", self.port.name, text)
+        log.log(level, "%s: %s", self.port.name, text)
 
     def lines(self, items):
         for t, raw in items:
@@ -139,14 +142,16 @@ class PortWorker:
             self.d.check_alerts(self.port, t, text)
 
     def became(self, state, detail=""):
+        if state != UNREACHABLE and self.state == UNREACHABLE:
+            self.event("ser2net reachable")
         if state == CONNECTED and self.state != CONNECTED:
             self.event("device connected")
         elif state != CONNECTED and self.state == CONNECTED:
             self.lines(self.split.flush())
             self.event("device disconnected")
         if state == UNREACHABLE and self.state != UNREACHABLE:
-            log.warning("%s: ser2net unreachable at %s:%s (%s)",
-                        self.port.name, self.port.host, self.port.port, detail)
+            self.event(f"ser2net unreachable at {self.port.host}:{self.port.port}: {detail}",
+                       logging.WARNING)
         self.state = state
         self.d.set_state(self.port, state, detail)
 
@@ -155,7 +160,7 @@ class PortWorker:
         while True:
             try:
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.port.host, self.port.port), 5)
+                    asyncio.open_connection(self.port.host, self.port.port), CONNECT_TIMEOUT)
             except (OSError, asyncio.TimeoutError) as e:
                 self.became(UNREACHABLE, str(e) or type(e).__name__)
                 await asyncio.sleep(backoff)
@@ -213,11 +218,11 @@ def trim_alerts(path, retention_days, now):
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return
-    cutoff = stamp(now - retention_days * 86400)
+    cutoff = now - retention_days * 86400
 
     def recent(line):
         try:
-            return json.loads(line)["time"] >= cutoff
+            return parse_stamp(json.loads(line)["time"]).timestamp() >= cutoff
         except (ValueError, KeyError, TypeError):
             return False
 

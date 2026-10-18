@@ -7,12 +7,15 @@ One file per port per day, in local time:
 
 Each line is a timestamp, a kind and the text:
 
-    2026-10-18T19:40:01.123 | boot ok, fw 1.4.2       data from the device
-    2026-10-18T19:40:00.871 ! device connected        logger event
+    2026-10-18T19:40:01.123+02:00 | boot ok, fw 1.4.2       data from the device
+    2026-10-18T19:40:00.871+02:00 ! device connected        logger event
 
-The timestamp is when the first byte of the line arrived. Bytes that are not
-valid UTF-8 and control characters are written as \\xNN; ANSI colour codes
-are removed.
+The timestamp is when the first byte of the line arrived, in local time with
+its UTC offset, so lines stay in order across a clock change and logs from
+machines in different zones can be compared. Files written before the offset
+was added (no +hh:mm) are read as local time. Bytes that are not valid UTF-8
+and control characters are written as \\xNN; ANSI colour
+codes are removed.
 """
 
 import gzip
@@ -20,12 +23,11 @@ import heapq
 import os
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 DATA = "|"
 EVENT = "!"
-TS_LEN = len("2026-10-18T19:40:01.123")
 MAX_LINE = 4096
 
 _ANSI = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -106,8 +108,20 @@ def render(raw):
     return text.translate(_CONTROL)
 
 
+def local(t):
+    """Epoch seconds to an aware datetime in the machine's zone."""
+    return datetime.fromtimestamp(t, timezone.utc).astimezone()
+
+def localize(dt):
+    """An aware datetime in the machine's zone; a naive one counts as local time."""
+    return dt.astimezone()
+
 def stamp(t):
-    return datetime.fromtimestamp(t).isoformat(timespec="milliseconds")
+    return local(t).isoformat(timespec="milliseconds")
+
+def parse_stamp(text):
+    """A timestamp as written by stamp(), or an older one without offset."""
+    return localize(datetime.fromisoformat(text))
 
 
 def format_line(t, kind, text):
@@ -128,17 +142,15 @@ class Entry:
 
 
 def parse_line(port, line):
-    line = line.rstrip("\n")
-    if len(line) < TS_LEN + 2 or line[TS_LEN] != " ":
+    ts, _, rest = line.rstrip("\n").partition(" ")
+    kind = rest[:1]
+    if kind not in (DATA, EVENT) or rest[1:2] not in (" ", ""):
         return None
     try:
-        t = datetime.fromisoformat(line[:TS_LEN])
+        t = parse_stamp(ts)
     except ValueError:
         return None
-    kind = line[TS_LEN + 1]
-    if kind not in (DATA, EVENT):
-        return None
-    return Entry(port, t, kind, line[TS_LEN + 3:])
+    return Entry(port, t, kind, rest[2:])
 
 
 def day_files(log_dir, port):
@@ -167,6 +179,8 @@ def _open(path):
 
 def read_port(log_dir, port, since=None, until=None):
     """Entries of one port in time order, between since and until (datetimes)."""
+    since = localize(since) if since else None
+    until = localize(until) if until else None
     for day, path in day_files(log_dir, port):
         if since and day < since.date():
             continue
@@ -217,7 +231,7 @@ class PortLog:
         self.f = None
 
     def write(self, t, kind, text):
-        day = datetime.fromtimestamp(t).date()
+        day = local(t).date()
         if day != self.day:
             self.close()
             self.folder.mkdir(parents=True, exist_ok=True)

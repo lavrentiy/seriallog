@@ -86,7 +86,7 @@ def cmd_ports(conf, a):
     updated = status.get("updated")
     if not updated:
         print(p.amber("No status yet: is the seriallog service running?"))
-    elif (datetime.now() - datetime.fromisoformat(updated)).total_seconds() > STALE_STATUS:
+    elif (datetime.now().astimezone() - logfile.parse_stamp(updated)).total_seconds() > STALE_STATUS:
         print(p.amber(f"Status last written {updated}: the seriallog service may be stopped."))
     for port in conf.ports:
         s = ports.get(port.name, {})
@@ -178,13 +178,13 @@ def read_alerts(conf, since):
         lines = (conf.log_dir / ALERTS_FILE).read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return out
-    cutoff = since.isoformat(timespec="milliseconds") if since else ""
     for line in lines:
         try:
             r = json.loads(line)
-        except ValueError:
+            t = logfile.parse_stamp(r["time"])
+        except (ValueError, KeyError, TypeError):
             continue
-        if r.get("time", "") >= cutoff:
+        if since is None or t >= since:
             out.append(r)
     return out
 

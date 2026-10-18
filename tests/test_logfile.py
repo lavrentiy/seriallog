@@ -2,7 +2,7 @@ import gzip
 import tempfile
 import time
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from seriallog import logfile
@@ -65,10 +65,22 @@ class FormatTest(unittest.TestCase):
     def test_roundtrip(self):
         t = ts("2026-10-18T19:40:01.123")
         line = logfile.format_line(t, DATA, "boot | ok")
-        self.assertEqual(line, "2026-10-18T19:40:01.123 | boot | ok\n")
+        when = datetime(2026, 10, 18, 19, 40, 1, 123000).astimezone()
+        self.assertEqual(line, f"{when.isoformat(timespec='milliseconds')} | boot | ok\n")
+        self.assertRegex(line, r"^2026-10-18T19:40:01\.123[+-]\d\d:\d\d \| ")
         e = logfile.parse_line("usb0", line)
         self.assertEqual((e.port, e.kind, e.text), ("usb0", DATA, "boot | ok"))
-        self.assertEqual(e.time, datetime(2026, 10, 18, 19, 40, 1, 123000))
+        self.assertEqual(e.time, when)
+
+    def test_other_zone(self):
+        e = logfile.parse_line("usb0", "2026-10-18T17:40:01.123+00:00 | x\n")
+        self.assertEqual(e.time, datetime(2026, 10, 18, 17, 40, 1, 123000, tzinfo=timezone.utc))
+        self.assertEqual(e.time.utcoffset(), e.time.astimezone().utcoffset())   # shown in local time
+
+    def test_line_without_offset(self):
+        """Files written before the offset was added are local time."""
+        e = logfile.parse_line("usb0", "2026-10-18T19:40:01.123 | x\n")
+        self.assertEqual(e.time, datetime(2026, 10, 18, 19, 40, 1, 123000).astimezone())
 
     def test_empty_text(self):
         e = logfile.parse_line("usb0", logfile.format_line(ts("2026-10-18T00:00:00"), DATA, ""))

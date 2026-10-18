@@ -12,8 +12,8 @@ writes to a device.
 
 | | |
 |---|---|
-| **Logs** | One file per port per day, millisecond timestamps, local time. Older days are gzipped and deleted after `retentionDays`. |
-| **Devices coming and going** | Polls ports with nothing plugged in and logs `device connected` / `device disconnected`. |
+| **Logs** | One file per port per day, millisecond timestamps in local time with UTC offset. Older days are gzipped and deleted after `retentionDays`. |
+| **Devices coming and going** | Polls ports with nothing plugged in and logs `device connected` / `device disconnected`. ser2net being unreachable, and coming back, is logged too, so a gap in a log explains itself. |
 | **Partial lines** | A prompt without a newline (`login: `) is written after `flushAfter` seconds of silence. |
 | **Alerts** | Regex per alert, optional port filter and cooldown. Recorded in `alerts.jsonl`; `seriallog notify` turns them into desktop notifications. |
 | **CLI** | `ports`, `tail [-f]`, `grep`, `alerts`; colour in a terminal, `--json` for scripts. |
@@ -37,14 +37,16 @@ seriallog alerts --since 3d
 
 ```
 /var/lib/seriallog/usb0/2026-10-18.log
-2026-10-18T19:40:00.871 ! device connected
-2026-10-18T19:40:01.123 | boot ok, fw 1.4.2
-2026-10-18T19:40:01.240 | login: 
+2026-10-18T19:40:00.871+02:00 ! device connected
+2026-10-18T19:40:01.123+02:00 | boot ok, fw 1.4.2
+2026-10-18T19:40:01.240+02:00 | login: 
 ```
 
-`|` is a line from the device, `!` an event from the logger. ANSI colour codes are
-removed; invalid UTF-8 and control characters are written as `\xNN`. Plain text, so
-`grep`, `zgrep` and `less` work on it too.
+`|` is a line from the device, `!` an event from the logger: a device connected or
+disconnected, ser2net unreachable or reachable again. Timestamps are local time with
+the UTC offset, so order survives a clock change and logs from different machines
+line up. ANSI colour codes are removed; invalid UTF-8 and control characters are
+written as `\xNN`. Plain text, so `grep`, `zgrep` and `less` work on it too.
 
 ## NixOS
 
@@ -87,4 +89,4 @@ nix build                                     # builds and runs the tests
 ```
 
 The tests include the daemon against a fake ser2net (open failures, a session with
-alerts and a partial line, ser2net being down).
+alerts and a partial line, ser2net being down and coming back).
