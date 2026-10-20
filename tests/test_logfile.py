@@ -142,6 +142,24 @@ class FilesTest(unittest.TestCase):
         texts = [e.text for e in logfile.read(self.dir, ["a"])]
         self.assertEqual(texts, ["day-3", "day-2", "day-1", "day-0"])
 
+    def test_follow_across_midnight(self):
+        days = [date(2026, 10, 17)]
+        gen = logfile.follow(self.dir, "a", poll=0, today=lambda: days[-1])
+        log = PortLog(self.dir, "a")
+        try:
+            log.write(ts("2026-10-17T23:00:00"), DATA, "old")        # already shown by tail
+            self.assertIsNone(next(gen))
+            log.write(ts("2026-10-17T23:59:59"), DATA, "late")
+            self.assertEqual(next(gen).text, "late")
+            self.assertIsNone(next(gen))
+            days.append(date(2026, 10, 18))                           # midnight passes
+            log.write(ts("2026-10-17T23:59:59.900"), DATA, "later")   # still in yesterday's file
+            log.write(ts("2026-10-18T00:00:01"), DATA, "early")
+            self.assertEqual([next(gen).text, next(gen).text], ["later", "early"])
+        finally:
+            gen.close()
+            log.close()
+
     def test_last_lines_across_days(self):
         self.write("a", ("2026-10-17T10:00:00", DATA, "x"), ("2026-10-17T11:00:00", DATA, "y"),
                    ("2026-10-18T10:00:00", DATA, "z"))

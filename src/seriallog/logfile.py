@@ -22,6 +22,7 @@ import gzip
 import heapq
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -142,7 +143,7 @@ class Entry:
 
 
 def parse_line(port, line):
-    ts, _, rest = line.rstrip("\n").partition(" ")
+    ts, _, rest = line.rstrip("\r\n").partition(" ")   # \r: a Windows file read in binary mode
     kind = rest[:1]
     if kind not in (DATA, EVENT) or rest[1:2] not in (" ", ""):
         return None
@@ -218,6 +219,50 @@ def last_lines(log_dir, port, n):
         if len(out) >= n:
             break
     return out
+
+
+def follow(log_dir, port, poll=0.3, today=date.today):
+    """New entries of a port as they are written, moving to the next day file at midnight.
+
+    Starts at the end of today's file, since the caller has shown the history
+    with last_lines(), and yields None after each quiet poll so the caller can
+    notice that nobody is listening any more. A line that is still being
+    written is left until it is complete. The daemon files a line under the
+    day its first byte arrived, so yesterday's file can still grow after
+    midnight; it is switched away from only once today's file exists, after
+    reading what landed in it since the previous poll.
+    """
+    folder = Path(log_dir) / port
+    day = f = None
+    skip = True
+
+    def entry(line):
+        return parse_line(port, line.decode("utf-8", "replace")) if line.endswith(b"\n") else None
+
+    try:
+        while True:
+            now = today()
+            if now != day and (folder / f"{now.isoformat()}.log").exists():
+                if f:
+                    yield from filter(None, map(entry, f))
+                    f.close()
+                f = open(folder / f"{now.isoformat()}.log", "rb")
+                if skip:
+                    f.seek(0, os.SEEK_END)
+                day = now
+            skip = False
+            line = f.readline() if f else b""
+            e = entry(line)
+            if e:
+                yield e
+                continue
+            if line and not line.endswith(b"\n"):        # partial line: wait for the rest
+                f.seek(-len(line), os.SEEK_CUR)
+            yield None
+            time.sleep(poll)
+    finally:
+        if f:
+            f.close()
 
 
 # ---------- Writing ----------

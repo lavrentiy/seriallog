@@ -17,6 +17,7 @@ writes to a device.
 | **Partial lines** | A prompt without a newline (`login: `) is written after `flushAfter` seconds of silence. |
 | **Alerts** | Regex per alert, optional port filter and cooldown. Recorded in `alerts.jsonl`; `seriallog notify` turns them into desktop notifications. |
 | **CLI** | `ports`, `tail [-f]`, `grep`, `alerts`; colour in a terminal, `--json` for scripts. |
+| **Web dashboard** | `seriallog web`: port states, live tail, search and alerts on one page, standard library only. |
 
 Standard library only (Python 3.11+).
 
@@ -32,6 +33,28 @@ seriallog alerts --since 3d
 
 `--since` and `--until` take `30m`, `2h`, `3d`, `today`, `yesterday`, `2026-10-18`,
 `2026-10-18T19:30` or `all`.
+
+## Web dashboard
+
+```bash
+seriallog web                          # http://127.0.0.1:8777
+seriallog web --bind 0.0.0.0:8777      # reachable from the network
+```
+
+One page, dark, no frameworks: the ports with their state and last line on the left,
+the live tail of the selected port in the middle (pause button, autoscroll, events in
+amber), a search box over all ports with `since`/`until`, and the last 24 hours of
+alerts across the top. The same data is available as JSON under `/api/` (`status`,
+`tail`, `follow` as server-sent events, `grep`, `alerts`).
+
+The dashboard only reads the log folder; it never writes and never talks to ser2net
+or the daemon. **It has no authentication.** Leave it on localhost and reach it over
+an SSH port forward (`ssh -L 8777:127.0.0.1:8777 bench`) or Tailscale, or bind it to
+a trusted network only.
+
+On NixOS, `services.seriallog.web.enable = true;` runs it as the separate service
+`seriallog-web` under a dynamic user with read-only access; `services.seriallog.web.bind`
+(default `"127.0.0.1:8777"`) sets the address.
 
 ## Log format
 
@@ -65,6 +88,7 @@ seriallog.nixosModules.default
       { name = "crash"; pattern = "PANIC|HardFault|Guru Meditation|assert(ion)? failed"; ignore_case = true; }
     ];
     notify = true;
+    web.enable = true;       # dashboard on http://127.0.0.1:8777, no authentication
   };
 }
 ```
@@ -89,4 +113,5 @@ nix build                                     # builds and runs the tests
 ```
 
 The tests include the daemon against a fake ser2net (open failures, a session with
-alerts and a partial line, ser2net being down and coming back).
+alerts and a partial line, ser2net being down and coming back) and the web dashboard
+served from a temporary log folder.
